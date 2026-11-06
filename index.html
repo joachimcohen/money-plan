@@ -71,7 +71,7 @@ input:focus,select:focus,textarea:focus{outline:3px solid var(--tint);border-col
 .err{color:var(--warm);font-weight:600;margin:8px 0}
 #tabs{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);z-index:5}
 #tabs .in{display:flex;width:100%;max-width:560px}
-#tabs button{flex:1;background:none;border:0;padding:8px 2px 8px;color:var(--mute);font:inherit;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:2px;min-height:60px;cursor:pointer}
+#tabs button{flex:1;background:none;border:0;padding:8px 0 8px;color:var(--mute);font:inherit;font-size:11.5px;display:flex;flex-direction:column;align-items:center;gap:2px;min-height:60px;cursor:pointer}
 #tabs button.on{color:var(--pri);font-weight:700}
 #tabs svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #fab{position:fixed;right:max(16px,calc(50% - 264px));bottom:calc(76px + env(safe-area-inset-bottom));z-index:6;min-width:60px;height:60px;border-radius:30px;border:0;background:var(--pri);color:var(--pri-ink);font:inherit;font-weight:700;font-size:17px;padding:0 20px;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer}
@@ -84,6 +84,20 @@ input:focus,select:focus,textarea:focus{outline:3px solid var(--tint);border-col
 .legend{display:flex;gap:14px;font-size:13px;color:var(--mute);margin-bottom:6px}
 .hrow{margin:12px 0}
 .hrow .top{display:flex;justify-content:space-between;font-size:15px}
+.deck{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;align-items:flex-start;margin:0 -16px;-webkit-overflow-scrolling:touch}
+.deck::-webkit-scrollbar{display:none}
+.slide{flex:0 0 100%;scroll-snap-align:start;padding:0 16px}
+.slide .card{padding:24px 18px;margin-bottom:6px}
+.slide h1{margin-top:0}
+.ico{width:72px;height:72px;border-radius:36px;background:var(--tint);display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+.ico svg{width:36px;height:36px;stroke:var(--pri);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.dots{display:flex;gap:8px;justify-content:center;margin:4px 0 12px}
+.dots i{width:9px;height:9px;border-radius:5px;background:var(--bar);transition:width .2s}
+.dots i.on{background:var(--pri);width:22px}
+.deckctl{position:sticky;bottom:0;background:var(--bg);padding:8px 0 calc(12px + env(safe-area-inset-bottom));margin-top:6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
+.chipbtn{border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:22px;padding:8px 14px;font:inherit;min-height:44px;cursor:pointer}
+.chipbtn:active{background:var(--tint)}
 </style>
 </head>
 <body>
@@ -110,11 +124,12 @@ const CONFIG = {
 const KEY = 'moneyplan.v1';
 const FREQS = ['Weekly', 'Fortnightly', 'Monthly', 'Yearly'];
 const MULT = {Weekly: 2, Fortnightly: 1, Monthly: 12 / 26, Yearly: 1 / 26};
-const CATS = ['Food and groceries', 'Eating out', 'Transport', 'Social and fun', 'Shopping', 'Health', 'Study', 'Other'];
+const CATS0 = ['Food and groceries', 'Eating out', 'Transport', 'Social and fun', 'Subscriptions', 'Shopping', 'Health', 'Study', 'Other'];
+const GOAL_IDEAS = ['Emergency fund', 'Holiday', 'Laptop'];
 const INCOME0 = ['Work pay', 'Government payments', 'Money from family', 'Other income'];
 const FIXED0 = ['Rent, board or mortgage', 'Electricity and gas', 'Internet and phone', 'Transport and car costs', 'Insurance', 'Uni fees and study costs', 'Subscriptions', 'Debt repayments', 'Other regular costs'];
 let storageOK = true;
-let S, tab = 'home', wiz = 0, deferredInstall = null, wizErr = '';
+let S, tab = 'home', wiz = 0, deferredInstall = null, wizErr = '', showWelcome = false, spSel = null;
 
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -134,15 +149,21 @@ function defaults() {
     goal: {name: '', amount: '', saved: '', by: ''},
     income: INCOME0.map(l => ({id: uid(), label: l, amt: '', freq: 'Fortnightly', custom: false})),
     fixed: FIXED0.map(l => ({id: uid(), label: l, amt: '', freq: 'Fortnightly', custom: false})),
-    spend: [], contrib: [], reflect: {}
+    spend: [], contrib: [], reflect: {},
+    cats: CATS0.map(l => ({id: uid(), label: l, amt: '', custom: false})),
+    carryFrom: today(), fresh: false
   };
 }
 function load() {
   try {
     const r = localStorage.getItem(KEY);
-    if (r) { const o = JSON.parse(r); return Object.assign(defaults(), o); }
+    if (r) { const o = JSON.parse(r); return ensure(Object.assign(defaults(), o)); }
   } catch (e) { storageOK = false; }
   return defaults();
+}
+function ensure(o) {
+  if (!Array.isArray(o.cats) || !o.cats.length) o.cats = CATS0.map(l => ({id: uid(), label: l, amt: '', custom: false}));
+  return o;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { storageOK = false; }
@@ -165,11 +186,21 @@ function plan() {
     done = saved >= target;
     g = done ? 0 : (target - saved) / left;
   }
-  return {inc, fix, g, left, saved, target, done, flex: inc - fix - g};
+  const cats = sumFn(S.cats), flex = inc - fix - g;
+  return {inc, fix, g, left, saved, target, done, flex, cats, unalloc: flex - cats};
 }
 const pIdx = d => Math.floor((dnum(d) - dnum(S.anchor)) / 14);
 const pStart = i => fromNum(dnum(S.anchor) + 14 * i);
 const pEnd = i => fromNum(dnum(S.anchor) + 14 * i + 13);
+function carryIn(i) {
+  const flex = plan().flex;
+  let first = pIdx(S.carryFrom);
+  if (!S.fresh) S.spend.forEach(x => { first = Math.min(first, pIdx(x.date)); });
+  first = Math.max(first, i - 300);
+  let c = 0;
+  for (let j = first; j < i; j++) c += flex - spentIn(j);
+  return c;
+}
 const spentIn = i => { const a = pStart(i), b = pEnd(i); return S.spend.filter(x => x.date >= a && x.date <= b).reduce((t, x) => t + x.amt, 0); };
 
 /* ---------- Small pieces ---------- */
@@ -182,9 +213,10 @@ const ICONS = {
   log: '<path d="M8 6h12M8 12h12M8 18h12"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   progress: '<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>',
   plan: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  spending: '<circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>'
 };
-const TABS = [['home', 'Home'], ['log', 'Log'], ['progress', 'Progress'], ['plan', 'Plan'], ['more', 'More']];
+const TABS = [['home', 'Home'], ['log', 'Log'], ['spending', 'Spending'], ['progress', 'Progress'], ['plan', 'Plan'], ['more', 'More']];
 
 /* ---------- Forms shared by setup and Plan tab ---------- */
 function linesHTML(kind) {
@@ -200,7 +232,7 @@ function linesHTML(kind) {
 }
 function hintText(l) {
   const a = parseFloat(l.amt) || 0;
-  return a > 0 && l.freq !== 'Fortnightly' ? `That is about ${money(perFn(l), 2)} each fortnight` : '';
+  return a > 0 && l.freq && l.freq !== 'Fortnightly' ? `That is about ${money(perFn(l), 2)} each fortnight` : '';
 }
 function incomeForm() {
   return `<div class="card"><h2>Money coming in</h2>
@@ -216,12 +248,13 @@ function fixedForm() {
     <button class="btn alt" data-act="add-fixed">+ Add another regular cost</button>
     <div class="sum total"><span>Per fortnight</span><span data-tot="fix">${money(plan().fix)}</span></div></div>`;
 }
-function goalForm() {
+function goalForm(showClear) {
   const g = S.goal;
   return `<div class="card"><h2>My goal</h2>
     <p class="mute small">One clear goal works best. For example: a laptop for $1,800 by the end of semester, or $500 put aside for emergencies.</p>
     <label for="g-name">What are you saving for?</label>
-    <input id="g-name" data-g="name" value="${esc(g.name)}" placeholder="e.g. Laptop" maxlength="60">
+    <div class="chips">${GOAL_IDEAS.map(x => `<button type="button" class="chipbtn" data-act="chip:${x}">${x}</button>`).join('')}</div>
+    <input id="g-name" data-g="name" value="${esc(g.name)}" placeholder="Or type your own" maxlength="60" style="margin-top:8px">
     <label for="g-amount">How much do you need?</label>
     <div class="money"><span>$</span><input id="g-amount" data-g="amount" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(g.amount)}" placeholder="0"></div>
     <label for="g-saved">How much do you have already?</label>
@@ -229,12 +262,36 @@ function goalForm() {
     <label for="g-by">By when?</label>
     <input id="g-by" data-g="by" type="date" value="${esc(g.by)}" min="${today()}">
     <div class="hint" data-goalhint style="margin-top:8px">${goalHint()}</div>
-    <button class="link" data-act="clear-goal">I do not have a goal yet</button></div>`;
+    ${showClear ? '<button class="link" data-act="clear-goal">Clear my goal</button>' : ''}</div>`;
 }
 function goalHint() {
   if (!hasGoal()) return '';
   const p = plan();
   return p.done ? 'You have already reached this goal.' : `To get there, set aside about <b>${money(p.g)}</b> a fortnight for ${p.left} fortnight${p.left === 1 ? '' : 's'}.`;
+}
+function catLinesHTML() {
+  return S.cats.map(l => `<div class="line" data-k="cats" data-id="${l.id}">
+    ${l.custom ? `<input data-f="label" value="${esc(l.label)}" placeholder="Name" aria-label="Name" style="margin-bottom:8px">` : `<div class="lblt">${esc(l.label)}</div>`}
+    <div class="money"><span>$</span><input data-f="amt" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(l.amt)}" placeholder="0" aria-label="Amount per fortnight"></div>
+    ${l.custom ? `<button class="link" data-act="rm">Remove this line</button>` : ''}
+  </div>`).join('');
+}
+function unallocMsg(p) {
+  if (p.cats <= 0) return '';
+  if (p.unalloc < -0.5) return `<p class="err">You have planned ${money(-p.unalloc)} more than your spending money. Try trimming a line.</p>`;
+  if (p.unalloc > 0.5) return `<p class="small mute">${money(p.unalloc)} is still unplanned. That can be your buffer.</p>`;
+  return `<p class="small mute">Every dollar has a job. Nice work.</p>`;
+}
+function catsForm() {
+  const p = plan();
+  return `<div class="card"><h2>Plan your spending</h2>
+    <p class="mute small">Share your spending money across the things you spend on. This is your best guess for each fortnight, and you can change it any time. You do not need to use every line.</p>
+    <div class="sum"><span>Spending money to share</span><span data-tot="flex">${money(p.flex)}</span></div>
+    ${catLinesHTML()}
+    <button class="btn alt" data-act="add-cat">+ Add your own category</button>
+    <div class="sum total"><span>Planned so far</span><span data-tot="cats">${money(p.cats)}</span></div>
+    <div class="sum"><span>Still to share</span><span data-tot="unalloc">${money(p.unalloc)}</span></div>
+    <div data-unalloc>${unallocMsg(p)}</div></div>`;
 }
 function startForm() {
   return `<div class="card"><h2>Your fortnight</h2>
@@ -250,18 +307,20 @@ function summaryCard() {
     <div class="sum"><span>Regular costs</span><span data-tot="fix">${money(p.fix)}</span></div>
     <div class="sum"><span>Set aside for goal</span><span data-tot="goal">${money(p.g)}</span></div>
     <div class="sum total"><span>Spending money</span><span data-tot="flex">${money(p.flex)}</span></div>
+    <div class="sum"><span>Planned across categories</span><span data-tot="cats">${money(p.cats)}</span></div>
     <div data-short>${msg}</div></div>`;
 }
 function refreshTotals() {
   const p = plan();
-  document.querySelectorAll('[data-tot]').forEach(el => { el.textContent = money({inc: p.inc, fix: p.fix, goal: p.g, flex: p.flex}[el.dataset.tot]); });
+  document.querySelectorAll('[data-tot]').forEach(el => { el.textContent = money({inc: p.inc, fix: p.fix, goal: p.g, flex: p.flex, cats: p.cats, unalloc: p.unalloc}[el.dataset.tot]); });
+  const ua = document.querySelector('[data-unalloc]'); if (ua) ua.innerHTML = unallocMsg(p);
   const gh = document.querySelector('[data-goalhint]'); if (gh) gh.innerHTML = goalHint();
   const sh = document.querySelector('[data-short]');
   if (sh) sh.innerHTML = p.flex < 0 ? `<p class="err">Your plan is ${money(-p.flex)} short each fortnight. That is a common spot to be in. Try changing a cost, or talk to someone about options.</p>` : '';
 }
 
 /* ---------- Setup steps ---------- */
-function stepsBar(n) { return `<div class="steps">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>`; }
+function stepsBar(n) { return `<div class="steps">${[1, 2, 3, 4, 5, 6].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>`; }
 function installTips() {
   return `<p class="small"><b>iPhone:</b> in Safari tap the Share button, then <b>Add to Home Screen</b>.<br><b>Android:</b> in Chrome tap the menu (three dots), then <b>Install app</b> or <b>Add to Home screen</b>.</p>`;
 }
@@ -274,34 +333,59 @@ function dataNotice() {
 function sheetLink() {
   return CONFIG.SPREADSHEET_URL ? `<a class="btn ghost" href="${esc(CONFIG.SPREADSHEET_URL)}" target="_blank" rel="noopener">Prefer a spreadsheet? Open the spreadsheet version</a>` : '';
 }
+const SLIDES = [
+  {i: '<path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/>', h: 'Welcome to your Money Plan', t: ['This is all about empowering you to track what you spend, so you can save for what matters to you.', 'It takes about five minutes to set up. You can come back and change anything, any time.']},
+  {i: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>', h: 'Start with a goal', t: ['Have a think: what do you want to save for? Maybe an emergency fund, a holiday or a laptop.', 'Not sure yet? That is fine. You can skip this and add a goal whenever you like.']},
+  {i: '<path d="M12 3v14M6 11l6 6 6-6M4 21h16"/>', h: 'Money in', t: ['Next, add the money you get, even if it is only approximate. Weekly, monthly or fortnightly all work, and the app turns it into a fortnight for you.', 'A fortnight is 14 days. You choose the day it starts, such as pay day.']},
+  {i: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>', h: 'Regular costs', t: ['Then add the costs you cannot change much, like rent and bills.', 'What is left, after your regular costs and the money you set aside for your goal, is your spending money.']},
+  {i: ICONS.plan, h: 'Plan your spending', t: ['Share your spending money across the things you spend on, like groceries, going out and subscriptions.', 'Think of it as your best guess. You can adjust it as you learn more.']},
+  {i: ICONS.progress, h: 'Then track as you go', t: ['Tap <b>+ Add spending</b> whenever you buy something. You will see how what you actually spend compares with your plan.', 'Money you do not spend, or spend over, rolls into your next fortnight, so you always know where you stand and how close you are to your goal.']},
+  {i: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', h: 'Your data stays on your phone', t: [], last: true}
+];
 function renderWizard() {
   let h = '';
-  if (wiz === 0) {
-    h = `<h1>Money Plan</h1><p class="mute">Set a goal, make a plan, then track your progress. It takes about five minutes to set up.</p>
-      ${dataNotice()}
-      <div class="card"><h3>Put it on your home screen</h3>${installTips()}
-      ${deferredInstall ? '<button class="btn alt" data-act="install">Install app</button>' : ''}</div>
-      ${!storageOK ? '<p class="err">This browser is not letting the app save anything (private browsing can do this). Open it in a normal tab to keep your plan.</p>' : ''}
-      <button class="btn" data-act="next">Get started</button>
-      <div style="margin-top:10px">${sheetLink()}</div>
-      <p class="small" style="text-align:center;margin-top:14px"><button class="link" data-act="open-restore">I already have a backup file</button></p>`;
+  if (wiz === 0 || showWelcome) {
+    const slides = SLIDES.map(sl => `<div class="slide"><div class="card">
+      <div class="ico"><svg viewBox="0 0 24 24" aria-hidden="true">${sl.i}</svg></div>
+      <h1>${sl.h}</h1>${sl.t.map(x => `<p>${x}</p>`).join('')}
+      ${sl.last ? `${dataNotice().replace('class="card warm"', 'class="card warm" style="box-shadow:none;margin-bottom:10px"')}
+        <h3>Put it on your home screen</h3>${installTips()}${deferredInstall ? '<button class="btn alt" data-act="install">Install app</button>' : ''}
+        ${!storageOK ? '<p class="err">This browser is not letting the app save anything (private browsing can do this). Open it in a normal tab to keep your plan.</p>' : ''}
+        ${sheetLink()}
+        ${S.setup ? '' : '<p class="small" style="text-align:center;margin:12px 0 0"><button class="link" data-act="open-restore">I already have a backup file</button></p>'}` : ''}
+    </div></div>`).join('');
+    h = `<div class="deck" id="deck">${slides}</div>
+      <div class="deckctl"><div class="dots">${SLIDES.map((_, k) => `<i class="${k === 0 ? 'on' : ''}"></i>`).join('')}</div>
+      <button class="btn" id="deckbtn" data-act="deck-next">Next</button>
+      <p style="text-align:center;margin:4px 0 0" id="deckskip"><button class="link" data-act="welcome-done">${S.setup ? 'Close' : 'Skip the tour'}</button></p></div>`;
   } else if (wiz === 1) {
-    h = `${stepsBar(1)}<h1>Step 1: Set a goal</h1>${goalForm()}${wizNav()}`;
+    h = `${stepsBar(1)}<h1>Step 1: Set a goal</h1>${goalForm(false)}${wizNav()}`;
   } else if (wiz === 2) {
     h = `${stepsBar(2)}<h1>Step 2: Your fortnight</h1>${startForm()}${wizNav()}`;
   } else if (wiz === 3) {
     h = `${stepsBar(3)}<h1>Step 3: Money in</h1>${incomeForm()}${wizNav()}`;
   } else if (wiz === 4) {
     h = `${stepsBar(4)}<h1>Step 4: Regular costs</h1>${fixedForm()}${wizNav()}`;
+  } else if (wiz === 5) {
+    h = `${stepsBar(5)}<h1>Step 5: Plan your spending</h1>${catsForm()}${wizNav()}`;
   } else {
-    h = `${stepsBar(5)}<h1>Step 5: Your plan</h1>${summaryCard()}
-      <p class="mute small">What is left is your spending money for each fortnight. Tap <b>+ Add spending</b> whenever you buy something, and the app does the rest.</p>
+    h = `${stepsBar(6)}<h1>Step 6: Your plan</h1>${summaryCard()}
+      <p class="mute small">That is your plan. Tap <b>+ Add spending</b> whenever you buy something, and the app does the rest. You can change any of this later in the Plan tab.</p>
       <div class="row"><button class="btn ghost" data-act="back">Back</button><button class="btn" data-act="finish">Start tracking</button></div>`;
   }
   $('#app').innerHTML = h;
+  if (document.getElementById('deck')) setDeck(0);
+}
+function setDeck(i) {
+  const n = SLIDES.length, last = i >= n - 1;
+  document.querySelectorAll('.dots i').forEach((x, k) => x.classList.toggle('on', k === i));
+  const b = $('#deckbtn'); if (!b) return;
+  b.dataset.act = last ? 'welcome-done' : 'deck-next';
+  b.textContent = last ? (S.setup ? 'Back to my plan' : "Let's get started") : 'Next';
+  const sk = $('#deckskip'); if (sk) sk.style.display = last ? 'none' : 'block';
 }
 function wizNav() {
-  return `${wizErr ? `<p class="err">${wizErr}</p>` : ''}<div class="row"><button class="btn ghost" data-act="back">Back</button><button class="btn" data-act="next">Next</button></div>`;
+  return `${wizErr ? `<p class="err">${wizErr}</p>` : ''}${wiz === 1 ? '<button class="btn ghost" data-act="skip-goal" style="margin-bottom:10px">I do not have a goal yet, skip</button>' : ''}<div class="row"><button class="btn ghost" data-act="back">Back</button><button class="btn" data-act="next">Next</button></div>`;
 }
 function wizValidate() {
   wizErr = '';
@@ -316,7 +400,7 @@ function wizValidate() {
 
 /* ---------- Tabs ---------- */
 function renderHome() {
-  const p = plan(), i = pIdx(today()), spent = spentIn(i), left = p.flex - spent;
+  const p = plan(), i = pIdx(today()), spent = spentIn(i), carry = carryIn(i), avail = p.flex + carry, left = avail - spent;
   const days = dnum(pEnd(i)) - dnum(today()) + 1;
   let hero;
   if (p.inc <= 0) {
@@ -326,8 +410,9 @@ function renderHome() {
     hero = `<div class="card hero"><div class="mute small">This fortnight: ${fmtD(pStart(i))} to ${fmtD(pEnd(i))}</div>
       <div class="big${over ? ' over' : ''}">${money(Math.abs(left))}</div>
       <div>${over ? 'over your spending money' : 'left to spend'}</div>
-      ${bar(p.flex > 0 ? spent / p.flex * 100 : 100, over)}
-      <div class="mute small">${money(spent)} spent of ${money(Math.max(0, p.flex))}</div>
+      ${bar(avail > 0 ? spent / avail * 100 : 100, over)}
+      <div class="mute small">${money(spent)} spent of ${money(Math.max(0, avail))}</div>
+      ${Math.abs(carry) >= 0.5 ? `<div class="mute small">${carry > 0 ? `Includes ${money(carry)} carried over from earlier` : `Less ${money(-carry)} carried over from earlier`}</div>` : ''}
       <p class="small" style="margin:10px 0 0">${over
         ? 'It happens to everyone. A lighter few days can help, and tomorrow is a fresh day.'
         : (days > 0 ? `About <b>${money(left / days)}</b> a day for the next ${days} day${days === 1 ? '' : 's'}.` : '')}</p></div>`;
@@ -388,7 +473,8 @@ function renderProgress() {
   progressSel = sel;
   const r = S.reflect[sel] || {};
   $('#app').innerHTML = `<h1>Progress</h1>${goal}
-    <div class="card"><h2>Fortnight by fortnight</h2>${hist || '<p class="mute">Your history will build up here.</p>'}</div>
+    <div class="card"><h2>Fortnight by fortnight</h2>
+      <p class="small mute">Balance carried into this fortnight: <b>${money(carryIn(cur))}</b></p>${hist || '<p class="mute">Your history will build up here.</p>'}</div>
     <div class="card"><h2>Looking back</h2>
       <p class="mute small">A few quiet minutes at the end of each fortnight. There are no wrong answers, and you can look back at older fortnights too.</p>
       <label for="rsel">Fortnight</label>
@@ -398,8 +484,34 @@ function renderProgress() {
       <label for="r-next">One small thing I will try next fortnight</label><textarea id="r-next" data-r="next">${esc(r.next || '')}</textarea></div>`;
 }
 let progressSel = null;
+function renderSpending() {
+  const p = plan(), cur = pIdx(today());
+  const opts = []; for (let i = cur; i >= cur - 5; i--) opts.push(i);
+  const sel = spSel != null && opts.includes(spSel) ? spSel : cur; spSel = sel;
+  const a = pStart(sel), b = pEnd(sel);
+  const by = {}; S.spend.filter(x => x.date >= a && x.date <= b).forEach(x => { by[x.cat] = (by[x.cat] || 0) + x.amt; });
+  const rows = S.cats.filter(c => c.label.trim()).map(c => ({label: c.label.trim(), plan: perFn(c)}));
+  Object.keys(by).forEach(k => { if (!rows.some(r => r.label === k)) rows.push({label: k, plan: 0}); });
+  const shown = rows.filter(r => r.plan > 0 || by[r.label] > 0);
+  const html = shown.map(r => {
+    const sp = by[r.label] || 0, over = r.plan > 0 && sp > r.plan;
+    return `<div class="hrow"><div class="top"><span>${esc(r.label)}</span><span><b>${money(sp)}</b>${r.plan > 0 ? ` of ${money(r.plan)}` : ' (not in your plan)'}</span></div>
+      ${bar(r.plan > 0 ? sp / r.plan * 100 : (sp ? 100 : 0), over)}
+      ${over ? `<div class="small" style="color:var(--warm)">${money(sp - r.plan)} over your guess. Worth a look, or a nudge to the plan.</div>` : ''}</div>`;
+  }).join('');
+  const tot = Object.values(by).reduce((t, v) => t + v, 0);
+  $('#app').innerHTML = `<h1>Spending</h1>
+    <p class="mute small">Your guess for each category, next to what you actually spent. Notice any surprises?</p>
+    <div class="card"><label for="ssel" style="margin-top:0">Fortnight</label>
+      <select id="ssel">${opts.map(i => `<option value="${i}"${i === sel ? ' selected' : ''}>${fmtD(pStart(i))} to ${fmtD(pEnd(i))}${i === cur ? ' (this one)' : ''}</option>`).join('')}</select></div>
+    <div class="card">${html || '<p class="mute">Nothing to show yet. Add amounts to your categories in the Plan tab, then log some spending.</p>'}
+      <div class="sum total"><span>Total spent</span><span>${money(tot)} of ${money(Math.max(0, p.flex))}</span></div>
+      ${p.cats > 0 ? `<div class="sum"><span class="mute small">Planned across categories</span><span class="mute small">${money(p.cats)}</span></div>` : ''}
+      <button class="btn alt" style="margin-top:10px" data-act="goto:plan">Change my category amounts</button></div>`;
+}
 function renderPlan() {
-  $('#app').innerHTML = `<h1>Plan</h1><p class="mute small">Changes save as you type.</p>${summaryCard()}${goalForm()}${startForm()}${incomeForm()}${fixedForm()}`;
+  $('#app').innerHTML = `<h1>Plan</h1><p class="mute small">Changes save as you type.</p>${summaryCard()}${goalForm(true)}${startForm()}${incomeForm()}${fixedForm()}${catsForm()}
+    <div class="card"><h3>Fresh start for my balance</h3><p class="small mute">Money left over, or overspent, rolls into your next fortnight. If you would like to start again from zero, you can reset it. Your entries are kept.</p><button class="btn ghost" data-act="fresh-start">Reset my balance to zero</button></div>`;
 }
 function renderMore() {
   const help = CONFIG.HELP.map(h => `<a class="btn ghost" href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.label)}</a>`).join('');
@@ -409,18 +521,19 @@ function renderMore() {
       <button class="btn" data-act="backup">Save a backup</button>
       <button class="btn alt" data-act="open-restore">Restore from a backup</button></div>
     ${dataNotice()}
+    <div class="card"><h3>Welcome tour</h3><p class="small mute">A quick reminder of how Money Plan works. Nothing you have entered changes.</p><button class="btn alt" data-act="replay-welcome">Replay the welcome</button></div>
     ${CONFIG.SPREADSHEET_URL ? `<div class="card"><h3>Prefer a bigger screen?</h3><p class="small mute">The spreadsheet version does the same job and works on a computer.</p>${sheetLink()}</div>` : ''}
     <div class="card"><h3>Add to your home screen</h3>${installTips()}${deferredInstall ? '<button class="btn alt" data-act="install">Install app</button>' : ''}</div>
     <div class="card"><h3>Need a hand?</h3><p class="small mute">If money feels tight, you are not alone and help is free.</p>${help}</div>
     <div class="card"><h3>Start again</h3><p class="small mute">This clears everything on this phone. Save a backup first if you might want it later.</p><button class="btn danger" data-act="reset">Clear everything</button></div>`;
 }
 function renderTab() {
-  ({home: renderHome, log: renderLog, progress: renderProgress, plan: renderPlan, more: renderMore})[tab]();
+  ({home: renderHome, log: renderLog, spending: renderSpending, progress: renderProgress, plan: renderPlan, more: renderMore})[tab]();
 }
 function render() {
-  const ready = S.intro && S.setup;
+  const ready = S.intro && S.setup && !showWelcome;
   $('#tabs').style.display = ready ? 'flex' : 'none';
-  $('#fab').style.display = ready && (tab === 'home' || tab === 'log') ? 'block' : 'none';
+  $('#fab').style.display = ready && (tab === 'home' || tab === 'log' || tab === 'spending') ? 'block' : 'none';
   if (!ready) { renderWizard(); return; }
   $('#tabs .in').innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}" ${k === tab ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>${l}</button>`).join('');
   renderTab();
@@ -428,6 +541,12 @@ function render() {
 function go(t) { tab = t; render(); window.scrollTo(0, 0); }
 
 /* ---------- Add and edit entries ---------- */
+function catOptions(e) {
+  const l = S.cats.map(c => c.label.trim()).filter(Boolean);
+  if (e && e.cat && !l.includes(e.cat)) l.push(e.cat);
+  if (!l.length) l.push('Other');
+  return l;
+}
 function entrySheet(kind, id) {
   const list = kind === 'spend' ? S.spend : S.contrib;
   const e = id ? list.find(x => x.id === id) : null;
@@ -435,7 +554,7 @@ function entrySheet(kind, id) {
   openSheet(`<h2>${title}</h2>
     <label for="e-amt">Amount</label>
     <div class="money"><span>$</span><input id="e-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${e ? e.amt : ''}" placeholder="0.00"></div>
-    ${kind === 'spend' ? `<label for="e-cat">What was it for?</label><select id="e-cat">${CATS.map(c => `<option${e && e.cat === c ? ' selected' : ''}>${c}</option>`).join('')}</select>` : ''}
+    ${kind === 'spend' ? `<label for="e-cat">What was it for?</label><select id="e-cat">${catOptions(e).map(c => `<option${e && e.cat === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>` : ''}
     <label for="e-date">Date</label><input id="e-date" type="date" value="${e ? e.date : today()}">
     ${kind === 'spend' ? `<label for="e-note">Note (optional)</label><input id="e-note" value="${e ? esc(e.note || '') : ''}" maxlength="60" placeholder="e.g. Coles">` : ''}
     <div class="err" id="e-err"></div>
@@ -480,7 +599,7 @@ function restoreFrom(file) {
       const o = JSON.parse(r.result);
       if (!o || o.v !== 1 || !Array.isArray(o.spend) || !Array.isArray(o.income) || !Array.isArray(o.fixed)) throw new Error('bad');
       if (!confirm('This replaces what is on this phone with the backup. Continue?')) return;
-      S = Object.assign(defaults(), o, {intro: true, setup: true}); save(); tab = 'home'; render(); toast('Backup restored');
+      S = ensure(Object.assign(defaults(), o, {intro: true, setup: true})); save(); tab = 'home'; render(); toast('Backup restored');
     } catch (e) { toast('That file is not a Money Plan backup'); }
   };
   r.readAsText(file);
@@ -495,12 +614,19 @@ document.addEventListener('click', e => {
   const [act, a, c] = b.dataset.act.split(':');
   const line = b.closest('.line');
   switch (act) {
-    case 'next': if (wiz === 0) S.intro = true; if (!wizValidate()) { renderWizard(); return; } wiz++; save(); renderWizard(); window.scrollTo(0, 0); break;
+    case 'next': if (!wizValidate()) { renderWizard(); return; } wiz++; save(); renderWizard(); window.scrollTo(0, 0); break;
     case 'back': wizErr = ''; wiz = Math.max(0, wiz - 1); renderWizard(); window.scrollTo(0, 0); break;
-    case 'finish': S.setup = true; S.intro = true; wiz = 0; save(); tab = 'home'; render(); window.scrollTo(0, 0); break;
+    case 'finish': S.setup = true; S.intro = true; wiz = 0; S.carryFrom = today(); S.fresh = false; save(); tab = 'home'; render(); window.scrollTo(0, 0); break;
     case 'add-income': S.income.push({id: uid(), label: '', amt: '', freq: 'Fortnightly', custom: true}); save(); S.setup ? renderTab() : renderWizard(); break;
     case 'add-fixed': S.fixed.push({id: uid(), label: '', amt: '', freq: 'Fortnightly', custom: true}); save(); S.setup ? renderTab() : renderWizard(); break;
     case 'rm': { const k = line.dataset.k; S[k] = S[k].filter(x => x.id !== line.dataset.id); save(); S.setup ? renderTab() : renderWizard(); refreshTotals(); break; }
+    case 'deck-next': { const d = $('#deck'); d.scrollBy({left: d.clientWidth, behavior: 'smooth'}); break; }
+    case 'welcome-done': if (S.setup) { showWelcome = false; go('home'); } else { S.intro = true; wiz = 1; showWelcome = false; save(); renderWizard(); window.scrollTo(0, 0); } break;
+    case 'replay-welcome': showWelcome = true; wiz = 0; render(); window.scrollTo(0, 0); break;
+    case 'skip-goal': S.goal = {name: '', amount: '', saved: '', by: ''}; wizErr = ''; wiz = 2; save(); renderWizard(); window.scrollTo(0, 0); break;
+    case 'chip': S.goal.name = a; save(); { const gi = $('#g-name'); if (gi) gi.value = a; } refreshTotals(); break;
+    case 'add-cat': S.cats.push({id: uid(), label: '', amt: '', custom: true}); save(); S.setup ? renderTab() : renderWizard(); break;
+    case 'fresh-start': if (confirm('Reset your running balance to zero from today? Your entries are kept.')) { S.carryFrom = today(); S.fresh = true; save(); renderTab(); toast('Balance reset'); } break;
     case 'clear-goal': S.goal = {name: '', amount: '', saved: '', by: ''}; save(); S.setup ? renderTab() : renderWizard(); break;
     case 'goto': go(a); break;
     case 'add-contrib': entrySheet('contrib'); break;
@@ -526,7 +652,9 @@ function onField(e) {
   if (t.id === 'anchor') { if (t.value) { S.anchor = t.value; save(); } return; }
   if (t.dataset.r) { const i = progressSel; S.reflect[i] = Object.assign(S.reflect[i] || {}, {[t.dataset.r]: t.value}); save(); return; }
   if (t.id === 'rsel' && e.type === 'change') { progressSel = parseInt(t.value, 10); renderProgress(); }
+  if (t.id === 'ssel' && e.type === 'change') { spSel = parseInt(t.value, 10); renderSpending(); }
 }
+document.addEventListener('scroll', e => { const d = e.target; if (d && d.classList && d.classList.contains('deck') && d.clientWidth) setDeck(Math.round(d.scrollLeft / d.clientWidth)); }, true);
 document.addEventListener('input', onField);
 document.addEventListener('change', onField);
 $('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) restoreFrom(f); e.target.value = ''; });
