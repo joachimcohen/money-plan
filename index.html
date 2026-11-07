@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Money Plan</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
 <meta name="description" content="Set a goal, make a plan and track your progress. Everything stays on your phone.">
 <meta name="theme-color" content="#0F766E">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -124,10 +125,10 @@ const CONFIG = {
 const KEY = 'moneyplan.v1';
 const FREQS = ['Weekly', 'Fortnightly', 'Monthly', 'Yearly'];
 const MULT = {Weekly: 2, Fortnightly: 1, Monthly: 12 / 26, Yearly: 1 / 26};
-const CATS0 = ['Food and groceries', 'Eating out', 'Transport', 'Social and fun', 'Subscriptions', 'Shopping', 'Health', 'Study', 'Other'];
+const CATS0 = ['Food and groceries', 'Eating out', 'Transport', 'Social and fun', 'Shopping', 'Health', 'Study', 'Other'];
 const GOAL_IDEAS = ['Emergency fund', 'Holiday', 'Laptop'];
 const INCOME0 = ['Work pay', 'Government payments', 'Money from family', 'Other income'];
-const FIXED0 = ['Rent, board or mortgage', 'Electricity and gas', 'Internet and phone', 'Transport and car costs', 'Insurance', 'Uni fees and study costs', 'Subscriptions', 'Debt repayments', 'Other regular costs'];
+const FIXED0 = ['Rent, board or mortgage', 'Electricity and gas', 'Internet and phone', 'Insurance', 'Uni fees and study costs', 'Subscriptions', 'Debt repayments', 'Other regular costs'];
 let storageOK = true;
 let S, tab = 'home', wiz = 0, deferredInstall = null, wizErr = '', showWelcome = false, spSel = null;
 
@@ -161,9 +162,50 @@ function load() {
   } catch (e) { storageOK = false; }
   return defaults();
 }
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanId = v => String(v == null ? '' : v).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16) || uid();
+const cleanStr = (v, n) => String(v == null ? '' : v).slice(0, n);
+const cleanNum = v => { const n = parseFloat(v); return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : null; };
+const cleanAmtStr = v => { const n = cleanNum(v); return v === '' || v == null || n == null ? '' : String(n); };
+const cleanDate = v => (typeof v === 'string' && DATE_RE.test(v) && !isNaN(Date.parse(v))) ? v : null;
+const arr = v => Array.isArray(v) ? v.slice(0, 5000) : [];
+// Rebuilds the saved plan from known fields only, so a damaged or hand-edited backup cannot carry anything unexpected.
 function ensure(o) {
-  if (!Array.isArray(o.cats) || !o.cats.length) o.cats = CATS0.map(l => ({id: uid(), label: l, amt: '', custom: false}));
-  return o;
+  const d = defaults();
+  const line = (l, withFreq) => {
+    const r = {id: cleanId(l && l.id), label: cleanStr(l && l.label, 80), amt: cleanAmtStr(l && l.amt), custom: !!(l && l.custom)};
+    if (withFreq) r.freq = FREQS.includes(l && l.freq) ? l.freq : 'Fortnightly';
+    return r;
+  };
+  const out = {v: 1, intro: !!o.intro, setup: !!o.setup};
+  out.anchor = cleanDate(o.anchor) || d.anchor;
+  out.carryFrom = cleanDate(o.carryFrom) || d.carryFrom;
+  out.fresh = !!o.fresh;
+  out.lastBackup = cleanDate(o.lastBackup);
+  const g = o.goal || {};
+  out.goal = {name: cleanStr(g.name, 60), amount: cleanAmtStr(g.amount), saved: cleanAmtStr(g.saved), by: cleanDate(g.by) || ''};
+  out.income = Array.isArray(o.income) ? o.income.slice(0, 50).map(l => line(l, true)) : d.income;
+  out.fixed = Array.isArray(o.fixed) ? o.fixed.slice(0, 50).map(l => line(l, true)) : d.fixed;
+  out.cats = Array.isArray(o.cats) && o.cats.length ? o.cats.slice(0, 50).map(l => line(l, false)) : d.cats;
+  const entry = (x, isSpend) => {
+    const amt = cleanNum(x && x.amt), date = cleanDate(x && x.date);
+    if (!(amt > 0) || !date) return null;
+    const r = {id: cleanId(x.id), amt, date};
+    if (isSpend) { r.cat = cleanStr(x.cat, 60) || 'Other'; r.note = cleanStr(x.note, 60); }
+    return r;
+  };
+  out.spend = arr(o.spend).map(x => entry(x, true)).filter(Boolean);
+  out.contrib = arr(o.contrib).map(x => entry(x, false)).filter(Boolean);
+  out.reflect = {};
+  if (o.reflect && typeof o.reflect === 'object') Object.keys(o.reflect).slice(0, 500).forEach(k => {
+    if (!/^-?\d{1,5}$/.test(k) || typeof o.reflect[k] !== 'object' || !o.reflect[k]) return;
+    const r = o.reflect[k]; out.reflect[k] = {well: cleanStr(r.well, 2000), hard: cleanStr(r.hard, 2000), next: cleanStr(r.next, 2000)};
+  });
+  // Tidy older saved plans: drop the doubled-up lines if they are still empty.
+  const used = l => l.custom || (parseFloat(l.amt) || 0) > 0;
+  out.cats = out.cats.filter(l => !(l.label === 'Subscriptions' && !used(l)));
+  out.fixed = out.fixed.filter(l => !(l.label === 'Transport and car costs' && !used(l)));
+  return out;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { storageOK = false; }
@@ -322,7 +364,7 @@ function refreshTotals() {
 /* ---------- Setup steps ---------- */
 function stepsBar(n) { return `<div class="steps">${[1, 2, 3, 4, 5, 6].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</div>`; }
 function installTips() {
-  return `<p class="small"><b>iPhone:</b> in Safari tap the Share button, then <b>Add to Home Screen</b>.<br><b>Android:</b> in Chrome tap the menu (three dots), then <b>Install app</b> or <b>Add to Home screen</b>.</p>`;
+  return `<p class="small"><b>Do this first, before you enter anything.</b> On iPhones the installed app keeps its own separate storage from the web page.</p><p class="small"><b>iPhone:</b> in Safari tap the Share button, then <b>Add to Home Screen</b>.<br><b>Android:</b> in Chrome tap the menu (three dots), then <b>Install app</b> or <b>Add to Home screen</b>.</p>`;
 }
 function dataNotice() {
   return `<div class="card warm"><h3>Please read: your data stays on this phone</h3>
@@ -338,7 +380,7 @@ const SLIDES = [
   {i: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>', h: 'Start with a goal', t: ['Have a think: what do you want to save for? Maybe an emergency fund, a holiday or a laptop.', 'Not sure yet? That is fine. You can skip this and add a goal whenever you like.']},
   {i: '<path d="M12 3v14M6 11l6 6 6-6M4 21h16"/>', h: 'Money in', t: ['Next, add the money you get, even if it is only approximate. Weekly, monthly or fortnightly all work, and the app turns it into a fortnight for you.', 'A fortnight is 14 days. You choose the day it starts, such as pay day.']},
   {i: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>', h: 'Regular costs', t: ['Then add the costs you cannot change much, like rent and bills.', 'What is left, after your regular costs and the money you set aside for your goal, is your spending money.']},
-  {i: ICONS.plan, h: 'Plan your spending', t: ['Share your spending money across the things you spend on, like groceries, going out and subscriptions.', 'Think of it as your best guess. You can adjust it as you learn more.']},
+  {i: ICONS.plan, h: 'Plan your spending', t: ['Share your spending money across the things you spend on, like groceries, going out and transport.', 'Think of it as your best guess. You can adjust it as you learn more.']},
   {i: ICONS.progress, h: 'Then track as you go', t: ['Tap <b>+ Add spending</b> whenever you buy something. You will see how what you actually spend compares with your plan.', 'Money you do not spend, or spend over, rolls into your next fortnight, so you always know where you stand and how close you are to your goal.']},
   {i: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', h: 'Your data stays on your phone', t: [], last: true}
 ];
@@ -553,9 +595,9 @@ function entrySheet(kind, id) {
   const title = kind === 'spend' ? (e ? 'Change spending' : 'Add spending') : (e ? 'Change goal money' : 'Money toward my goal');
   openSheet(`<h2>${title}</h2>
     <label for="e-amt">Amount</label>
-    <div class="money"><span>$</span><input id="e-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${e ? e.amt : ''}" placeholder="0.00"></div>
+    <div class="money"><span>$</span><input id="e-amt" type="number" inputmode="decimal" step="0.01" min="0" value="${e ? esc(e.amt) : ''}" placeholder="0.00"></div>
     ${kind === 'spend' ? `<label for="e-cat">What was it for?</label><select id="e-cat">${catOptions(e).map(c => `<option${e && e.cat === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>` : ''}
-    <label for="e-date">Date</label><input id="e-date" type="date" value="${e ? e.date : today()}">
+    <label for="e-date">Date</label><input id="e-date" type="date" value="${e ? esc(e.date) : today()}">
     ${kind === 'spend' ? `<label for="e-note">Note (optional)</label><input id="e-note" value="${e ? esc(e.note || '') : ''}" maxlength="60" placeholder="e.g. Coles">` : ''}
     <div class="err" id="e-err"></div>
     <div style="margin-top:14px"><button class="btn" data-act="save-entry:${kind}:${id || ''}">Save</button>
